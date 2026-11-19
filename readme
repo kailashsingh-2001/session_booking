@@ -1,0 +1,320 @@
+# Session Booking API
+
+A REST API for a platform where users book sessions with teachers. Teachers create available sessions, users book them, and completed sessions appear in the user's history.
+
+**Tech stack:** Node.js, TypeScript, Express.js, MongoDB, Mongoose
+
+---
+
+## Features
+
+- Create users (unique email) and teachers
+- Create sessions for a teacher (default status `AVAILABLE`)
+- List available sessions for a given date (MongoDB Aggregation Pipeline)
+- Book a session (only `AVAILABLE` sessions, a booked session cannot be booked again)
+- Mark a booked session as completed
+- User session list split into upcoming and completed sessions (MongoDB Aggregation Pipeline)
+- Proper HTTP status codes and centralized error handling
+
+---
+
+## Prerequisites
+
+- [Node.js](https://nodejs.org/) 18 or higher
+- [MongoDB](https://www.mongodb.com/try/download/community) running locally, **or** a free [MongoDB Atlas](https://www.mongodb.com/atlas) connection string
+- [Postman](https://www.postman.com/downloads/) (for testing the APIs)
+
+---
+
+## Setup Instructions
+
+### 1. Clone the repository
+
+```bash
+git clone <your-repository-url>
+cd session-booking
+```
+
+### 2. Install dependencies
+
+```bash
+npm install
+```
+
+### 3. Create the environment file
+
+Create a file named `.env` in the project root (next to `package.json`). You can copy the sample file:
+
+```bash
+cp .env.example .env
+```
+
+Windows (Command Prompt): `copy .env.example .env`
+
+Then edit `.env`:
+
+```
+PORT=5000
+MONGODB_URI=mongodb://127.0.0.1:27017/session_booking
+```
+
+| Variable | Description |
+|---|---|
+| `PORT` | Port the server runs on |
+| `MONGODB_URI` | MongoDB connection string (local or Atlas) |
+
+For MongoDB Atlas, use a string like:
+`mongodb+srv://<username>:<password>@<cluster>.mongodb.net/session_booking`
+and allow your IP address under **Network Access** in Atlas.
+
+### 4. Start the server
+
+Development mode (restarts automatically when you save a file):
+
+```bash
+npm run dev
+```
+
+Production mode:
+
+```bash
+npm run build
+npm start
+```
+
+You should see:
+
+```
+MongoDB connected
+Server running on http://localhost:5000
+```
+
+### 5. Check that it works
+
+Open `http://localhost:5000/health` in your browser. It should return:
+
+```json
+{ "success": true, "message": "OK" }
+```
+
+---
+
+## Testing with Postman
+
+1. Open Postman and click **Import**.
+2. Select `postman_collection.json` from this repository.
+3. Run the requests from top to bottom. The ids (`teacherId`, `userId`, `sessionId`) are saved automatically between requests.
+
+| Order | Request | Expected status |
+|---|---|---|
+| 1 | Create Teacher (helper) | 201 |
+| 2 | Create User | 201 |
+| 3 | Create User with duplicate email | 409 |
+| 4 | Create Session | 201 |
+| 5 | Create Session with invalid time range | 400 |
+| 6 | Available Sessions | 200 |
+| 7 | Book Session | 200 |
+| 8 | Book Session again | 409 |
+| 9 | Mark Session Complete | 200 |
+| 10 | Complete again | 409 |
+| 11 | User Session List | 200 |
+
+The collection uses a variable `baseUrl` (default `http://localhost:5000`). Change it if you use a different port.
+
+---
+
+## Project Structure
+
+```
+session-booking/
+├── config/
+│   ├── db.ts                  # MongoDB connection
+│   └── env.ts                 # Loads environment variables
+├── controllers/
+│   ├── user.controller.ts     # Create user, user session list
+│   ├── teacher.controller.ts  # Create teacher (helper)
+│   └── session.controller.ts  # Create, available, book, complete
+├── middlewares/
+│   └── errorHandler.ts        # Centralized error handling and 404 handler
+├── models/
+│   ├── User.ts
+│   ├── Teacher.ts
+│   └── Session.ts
+├── routes/
+│   └── index.ts               # Route definitions
+├── utils/
+│   ├── AppError.ts            # Custom error class
+│   ├── asyncHandler.ts        # Catches errors from async controllers
+│   └── validators.ts          # Input validation helpers
+├── app.ts                     # Express app setup
+├── server.ts                  # Entry point
+├── .env.example
+├── package.json
+├── tsconfig.json
+└── postman_collection.json
+```
+
+---
+
+## Database Schemas
+
+**User**
+
+| Field | Type | Notes |
+|---|---|---|
+| fullName | String | required |
+| email | String | required, unique |
+| phone | String | required |
+| createdAt, updatedAt | Date | automatic |
+
+**Teacher**
+
+| Field | Type | Notes |
+|---|---|---|
+| fullName | String | required |
+| email | String | required |
+| specialization | String | required |
+| experience | Number | required, years |
+| createdAt, updatedAt | Date | automatic |
+
+**Session**
+
+| Field | Type | Notes |
+|---|---|---|
+| teacherId | ObjectId (Teacher) | required |
+| userId | ObjectId (User) or null | null until booked |
+| startTime | Date | required |
+| endTime | Date | required, must be after startTime |
+| status | String | `AVAILABLE` (default), `BOOKED`, `COMPLETED` |
+| completedAt | Date or null | set when completed |
+| createdAt, updatedAt | Date | automatic |
+
+---
+
+## API Documentation
+
+### 1. Create User
+
+`POST /users`
+
+```json
+{ "fullName": "Kailash Singh", "email": "kailash@example.com", "phone": "8955549302" }
+```
+
+- `201` user created
+- `400` missing or invalid field
+- `409` email already exists
+
+### 2. Create Session
+
+`POST /sessions`
+
+```json
+{
+  "teacherId": "<teacher id>",
+  "startTime": "2026-12-01T10:00:00.000Z",
+  "endTime": "2026-12-01T11:00:00.000Z"
+}
+```
+
+- `201` session created with status `AVAILABLE`
+- `400` invalid id/date, or `endTime` is not greater than `startTime`
+- `404` teacher not found
+
+### 3. Available Sessions for Booking
+
+`GET /sessions/available?dateTimestamp=1796119200000`
+
+Returns all `AVAILABLE` sessions on the date of the timestamp, with teacher details. Implemented with the MongoDB Aggregation Pipeline (`$match`, `$sort`, `$lookup`, `$unwind`, `$project`).
+
+- `dateTimestamp` is a Unix timestamp in **milliseconds**. The full **UTC** day of that timestamp is searched.
+- `200` list of sessions
+- `400` missing or invalid timestamp
+
+### 4. Book Session
+
+`POST /sessions/:id/book`
+
+```json
+{ "userId": "<user id>" }
+```
+
+Rules: the user and session must exist, only `AVAILABLE` sessions can be booked, and a booked session cannot be booked again. The status is updated to `BOOKED` and the session is linked to the user.
+
+- `200` session booked
+- `400` invalid id
+- `404` user or session not found
+- `409` session is not available
+
+### 5. Mark Session Complete
+
+`PATCH /sessions/:id/complete`
+
+Only `BOOKED` sessions can be completed. Status becomes `COMPLETED` and `completedAt` is set.
+
+- `200` session completed
+- `400` invalid id
+- `404` session not found
+- `409` session is not in `BOOKED` status
+
+### 6. User Session List
+
+`GET /users/:id/sessions`
+
+Returns the user's sessions separated into `upcomingSessions` (status `BOOKED`) and `completedSessions` (status `COMPLETED`), each with teacher details. Implemented with the MongoDB Aggregation Pipeline (`$match`, `$facet`, `$lookup`, `$unwind`, `$project`).
+
+- `200` both lists (empty arrays if none)
+- `400` invalid id
+- `404` user not found
+
+### Helper: Create Teacher
+
+`POST /teachers` (not part of the assignment, added so a teacher can be created for testing)
+
+```json
+{ "fullName": "Anita Sharma", "email": "anita@example.com", "specialization": "Mathematics", "experience": 6 }
+```
+
+---
+
+## Error Format
+
+All errors use the same JSON format:
+
+```json
+{ "success": false, "message": "Session is not available for booking" }
+```
+
+| Status | Meaning |
+|---|---|
+| 200 / 201 | Success / created |
+| 400 | Validation error or invalid id |
+| 404 | Resource or route not found |
+| 409 | Conflict (duplicate email, or session in the wrong state) |
+| 500 | Unexpected server error |
+
+---
+
+## Design Notes
+
+- **Race-safe booking:** booking and completing use a single atomic `findOneAndUpdate` that checks the current status, so two users cannot book the same session at the same time.
+- **Async/await only** with an `asyncHandler` wrapper, so all errors reach the centralized error handler.
+- **Aggregation Pipeline** is used for the available sessions API and the user session list API, as required.
+- **Environment variables** keep the database URL and port out of the code.
+- **Phone is stored as a String** to keep leading zeros and the country code.
+
+---
+
+## Scripts
+
+| Command | Description |
+|---|---|
+| `npm run dev` | Start in development mode with auto-restart |
+| `npm run build` | Compile TypeScript to the `dist` folder |
+| `npm start` | Run the compiled code from `dist` |
+
+---
+
+## Author
+
+Kailash Singh
